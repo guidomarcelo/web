@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Descargar Documento</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+
+        .icon {
+            font-size: 64px;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+
+        .info {
+            color: #666;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        .document-info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .document-info p {
+            margin: 8px 0;
+            color: #555;
+        }
+
+        .document-info strong {
+            color: #333;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        .success {
+            background: #efe;
+            color: #3c3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .success.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">📄</div>
+        <h1 id="titulo">Descargando Documento</h1>
+        <p class="info" id="mensaje">Preparando la descarga...</p>
+        
+        <div class="document-info" id="documentInfo" style="display: none;">
+            <p><strong>Documento:</strong> <span id="docNombre"></span></p>
+            <p><strong>Tipo:</strong> <span id="docTipo"></span></p>
+            <p><strong>Fecha:</strong> <span id="docFecha"></span></p>
+            <p><strong>Inmueble:</strong> <span id="inmuebleDireccion"></span></p>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p style="margin-top: 10px; color: #666;">Descargando archivo...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+        <div class="success" id="success"></div>
+
+        <button class="btn" id="btnDescargar" style="display: none;">Descargar Manualmente</button>
+    </div>
+
+    <script>
+        // Función para descargar archivo desde Base64
+        function descargarDesdeBase64(base64, nombreArchivo, tipoMime) {
+            try {
+                // Convertir Base64 a Blob
+                const byteCharacters = atob(base64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: tipoMime });
+
+                // Crear URL y descargar
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = nombreArchivo;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                return true;
+            } catch (error) {
+                console.error('Error al descargar:', error);
+                return false;
+            }
+        }
+
+        // Obtener datos del QR desde la URL
+        function obtenerDatosQR() {
+            // Intentar obtener desde hash de URL
+            const hash = window.location.hash.substring(1);
+            if (hash) {
+                try {
+                    return JSON.parse(decodeURIComponent(hash));
+                } catch (e) {
+                    console.error('Error al parsear datos del hash:', e);
+                }
+            }
+
+            // Intentar obtener desde parámetro de URL
+            const params = new URLSearchParams(window.location.search);
+            const datosParam = params.get('datos');
+            if (datosParam) {
+                try {
+                    return JSON.parse(decodeURIComponent(datosParam));
+                } catch (e) {
+                    console.error('Error al parsear datos del parámetro:', e);
+                }
+            }
+
+            return null;
+        }
+
+        // Procesar descarga automática
+        async function procesarDescarga() {
+            const loading = document.getElementById('loading');
+            const errorDiv = document.getElementById('error');
+            const successDiv = document.getElementById('success');
+            const documentInfo = document.getElementById('documentInfo');
+            const btnDescargar = document.getElementById('btnDescargar');
+
+            loading.classList.add('active');
+
+            try {
+                // Obtener datos del QR
+                let datosQR = obtenerDatosQR();
+
+                // Si no hay datos en la URL, intentar obtener desde localStorage (para compatibilidad)
+                if (!datosQR) {
+                    const datosGuardados = localStorage.getItem('qrDatosDescarga');
+                    if (datosGuardados) {
+                        try {
+                            datosQR = JSON.parse(datosGuardados);
+                            localStorage.removeItem('qrDatosDescarga');
+                        } catch (e) {
+                            console.error('Error al parsear datos guardados:', e);
+                        }
+                    }
+                }
+
+                if (!datosQR) {
+                    throw new Error('No se encontraron datos del documento en el QR');
+                }
+
+                // Si el QR contiene una URL, redirigir
+                if (datosQR.url || datosQR.urlDescarga) {
+                    const url = datosQR.url || datosQR.urlDescarga;
+                    window.location.href = url;
+                    return;
+                }
+
+                // Mostrar información del documento
+                if (datosQR.documentoNombre) {
+                    document.getElementById('docNombre').textContent = datosQR.documentoNombre;
+                    document.getElementById('titulo').textContent = datosQR.documentoNombre;
+                }
+                if (datosQR.documentoTipo) {
+                    document.getElementById('docTipo').textContent = datosQR.documentoTipo;
+                }
+                if (datosQR.documentoFecha) {
+                    const fecha = new Date(datosQR.documentoFecha);
+                    document.getElementById('docFecha').textContent = fecha.toLocaleDateString('es-ES');
+                }
+                if (datosQR.inmuebleDireccion) {
+                    document.getElementById('inmuebleDireccion').textContent = datosQR.inmuebleDireccion;
+                }
+
+                documentInfo.style.display = 'block';
+
+                // Verificar si tiene archivo en Base64
+                if (datosQR.archivoBase64 && datosQR.documentoArchivo) {
+                    const nombreArchivo = datosQR.documentoArchivo;
+                    const tipoMime = datosQR.archivoTipo || 'application/octet-stream';
+
+                    // Esperar un momento para mostrar la información
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                    // Descargar archivo
+                    const exito = descargarDesdeBase64(datosQR.archivoBase64, nombreArchivo, tipoMime);
+
+                    loading.classList.remove('active');
+
+                    if (exito) {
+                        successDiv.textContent = '¡Descarga completada! El archivo se ha descargado correctamente.';
+                        successDiv.classList.add('active');
+                        document.getElementById('mensaje').textContent = 'El documento se ha descargado automáticamente.';
+                    } else {
+                        throw new Error('Error al procesar la descarga del archivo');
+                    }
+                } else {
+                    loading.classList.remove('active');
+                    errorDiv.textContent = 'Este QR no contiene un archivo para descargar. Solo contiene información del documento.';
+                    errorDiv.classList.add('active');
+                    document.getElementById('mensaje').textContent = 'Este QR contiene información del documento pero no incluye el archivo.';
+                    
+                    // Mostrar información del documento
+                    if (datosQR.mensaje) {
+                        document.getElementById('mensaje').textContent = datosQR.mensaje;
+                    }
+                }
+            } catch (error) {
+                loading.classList.remove('active');
+                errorDiv.textContent = `Error: ${error.message}`;
+                errorDiv.classList.add('active');
+                document.getElementById('mensaje').textContent = 'Hubo un error al procesar la descarga.';
+                btnDescargar.style.display = 'block';
+            }
+        }
+
+        // Botón de descarga manual
+        document.getElementById('btnDescargar').addEventListener('click', () => {
+            procesarDescarga();
+        });
+
+        // Iniciar descarga automática al cargar la página
+        window.addEventListener('load', () => {
+            setTimeout(procesarDescarga, 500);
+        });
+    </script>
+</body>
+</html>
+
