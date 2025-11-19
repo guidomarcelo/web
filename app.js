@@ -3,9 +3,11 @@
 class GestorInmuebles {
     constructor() {
         this.usuarioActual = null;
-        this.inmuebles = this.cargarInmuebles();
+        this.inmuebles = [];
         this.inmuebleActual = null;
         this.dbManager = new DatabaseManager();
+        this.firebaseManager = null;
+        this.usandoFirebase = false;
         // Lista de todos los tipos de documentos requeridos
         this.tiposDocumentos = [
             'informes',
@@ -35,12 +37,33 @@ class GestorInmuebles {
         // Verificar si hay sesión activa
         this.verificarSesion();
         
-        // Inicializar IndexedDB
+        // Inicializar Firebase si está disponible
+        try {
+            if (typeof firebase !== 'undefined' && firebase.apps.length > 0) {
+                this.firebaseManager = new FirebaseManager();
+                this.usandoFirebase = true;
+                console.log('Firebase inicializado correctamente');
+                
+                if (this.usuarioActual) {
+                    this.firebaseManager.setUsuario(this.usuarioActual);
+                    // Sincronizar datos
+                    this.inmuebles = await this.firebaseManager.sincronizar();
+                }
+            } else {
+                console.log('Firebase no configurado, usando almacenamiento local');
+                this.inmuebles = this.cargarInmuebles();
+            }
+        } catch (error) {
+            console.error('Error al inicializar Firebase:', error);
+            console.log('Usando almacenamiento local como fallback');
+            this.inmuebles = this.cargarInmuebles();
+        }
+        
+        // Inicializar IndexedDB (siempre como fallback)
         try {
             await this.dbManager.init();
         } catch (error) {
-            console.error('Error al inicializar la base de datos:', error);
-            alert('Error al inicializar la base de datos. Algunas funciones pueden no estar disponibles.');
+            console.error('Error al inicializar IndexedDB:', error);
         }
         
         this.setupEventListeners();
@@ -89,15 +112,29 @@ class GestorInmuebles {
     }
 
     // Mostrar aplicación principal
-    mostrarAplicacion() {
+    async mostrarAplicacion() {
         document.getElementById('loginContainer').classList.add('hidden');
         document.getElementById('mainApp').classList.remove('hidden');
+        
+        // Configurar Firebase Manager con el usuario actual
+        if (this.firebaseManager) {
+            this.firebaseManager.setUsuario(this.usuarioActual);
+            // Sincronizar datos al iniciar sesión
+            try {
+                this.inmuebles = await this.firebaseManager.sincronizar();
+                this.mostrarInmuebles();
+            } catch (error) {
+                console.error('Error al sincronizar:', error);
+                this.inmuebles = this.cargarInmuebles();
+            }
+        }
         
         // Obtener información del usuario para mostrar
         const usuarios = this.inicializarUsuarios();
         const usuario = usuarios[this.usuarioActual];
         const nombreMostrar = usuario?.email || this.usuarioActual;
-        document.getElementById('userInfo').innerHTML = `<i class="fas fa-user"></i> ${nombreMostrar}`;
+        const syncIcon = this.usandoFirebase ? '<i class="fas fa-cloud" title="Sincronizado en la nube"></i>' : '<i class="fas fa-hdd" title="Almacenamiento local"></i>';
+        document.getElementById('userInfo').innerHTML = `${syncIcon} <i class="fas fa-user"></i> ${nombreMostrar}`;
     }
 
     // Inicializar usuarios (crear usuario por defecto si no existe)
@@ -219,14 +256,21 @@ class GestorInmuebles {
         document.getElementById('loginForm').reset();
     }
 
-    // Cargar inmuebles desde localStorage
+    // Cargar inmuebles desde localStorage (fallback)
     cargarInmuebles() {
         const datos = localStorage.getItem('inmuebles');
         return datos ? JSON.parse(datos) : [];
     }
 
-    // Guardar inmuebles en localStorage
-    guardarInmuebles() {
+    // Guardar inmuebles (Firebase o localStorage)
+    async guardarInmuebles() {
+        if (this.firebaseManager && this.usuarioActual) {
+            // Guardar en Firebase
+            for (const inmueble of this.inmuebles) {
+                await this.firebaseManager.guardarInmueble(inmueble);
+            }
+        }
+        // También guardar en localStorage como backup
         localStorage.setItem('inmuebles', JSON.stringify(this.inmuebles));
     }
 
@@ -464,7 +508,7 @@ class GestorInmuebles {
     }
 
     // Guardar inmueble
-    guardarInmueble(e) {
+    async guardarInmueble(e) {
         e.preventDefault();
         if (!this.usuarioActual) {
             this.mostrarLogin();
@@ -493,7 +537,7 @@ class GestorInmuebles {
             this.inmuebles.push(inmueble);
         }
 
-        this.guardarInmuebles();
+        await this.guardarInmuebles();
         this.mostrarLista();
     }
 
@@ -874,7 +918,13 @@ class GestorInmuebles {
         const documento = this.inmuebleActual.documentos.find(d => d.id === id);
         if (documento && documento.archivoNombre) {
             try {
-                await this.dbManager.descargarArchivo(id, nombreArchivo);
+                // Intentar descargar desde Firebase Storage si hay URL
+                if (documento.archivoUrl && this.firebaseManager) {
+                    await this.firebaseManager.descargarArchivo(id, nombreArchivo, documento.archivoUrl);
+                } else {
+                    // Fallback a IndexedDB
+                    await this.dbManager.descargarArchivo(id, nombreArchivo);
+                }
             } catch (error) {
                 console.error('Error al descargar archivo:', error);
                 alert(`No se pudo descargar el archivo: ${nombreArchivo}\n\nEl archivo puede no estar disponible.`);
@@ -910,12 +960,18 @@ class GestorInmuebles {
         if (confirm('¿Estás seguro de que deseas eliminar este documento?')) {
             const documento = this.inmuebleActual.documentos.find(d => d.id === id);
             if (documento) {
-                // Eliminar archivo de IndexedDB si existe
+                // Eliminar archivo de Firebase Storage o IndexedDB
                 if (documento.archivoNombre) {
                     try {
-                        await this.dbManager.eliminarArchivo(id);
+                        if (documento.archivoRuta && this.firebaseManager) {
+                            // Eliminar de Firebase Storage
+                            await this.firebaseManager.eliminarArchivo(documento.archivoRuta);
+                        } else {
+                            // Eliminar de IndexedDB
+                            await this.dbManager.eliminarArchivo(id);
+                        }
                     } catch (error) {
-                        console.error('Error al eliminar archivo de IndexedDB:', error);
+                        console.error('Error al eliminar archivo:', error);
                     }
                 }
 
@@ -926,7 +982,7 @@ class GestorInmuebles {
                     this.inmuebles[inmuebleIndex] = this.inmuebleActual;
                 }
 
-                this.guardarInmuebles();
+                await this.guardarInmuebles();
                 this.mostrarDocumentos();
                 
                 // Si el modal de lista está abierto, actualizarlo
@@ -942,21 +998,25 @@ class GestorInmuebles {
 
     // Abrir documento
     async abrirDocumento(id) {
+        if (!this.usuarioActual) {
+            this.mostrarLogin();
+            return;
+        }
         if (!this.inmuebleActual || !this.inmuebleActual.documentos) return;
         
         const documento = this.inmuebleActual.documentos.find(d => d.id === id);
         if (documento && documento.archivoNombre) {
             try {
-                // Intentar abrir el archivo desde IndexedDB
-                await this.dbManager.abrirArchivo(id);
-            } catch (error) {
-                // Si no se encuentra en IndexedDB, intentar descargar
-                try {
-                    await this.dbManager.descargarArchivo(id, documento.archivoNombre);
-                } catch (error2) {
-                    console.error('Error al abrir archivo:', error2);
-                    alert(`No se pudo abrir el archivo: ${documento.archivoNombre}\n\nEl archivo puede no estar disponible.`);
+                // Intentar abrir desde Firebase Storage si hay URL
+                if (documento.archivoUrl && this.firebaseManager) {
+                    await this.firebaseManager.abrirArchivo(id, documento.archivoUrl);
+                } else {
+                    // Fallback a IndexedDB
+                    await this.dbManager.abrirArchivo(id);
                 }
+            } catch (error) {
+                console.error('Error al abrir archivo:', error);
+                alert(`No se pudo abrir el archivo: ${documento.archivoNombre}\n\nEl archivo puede no estar disponible.`);
             }
         } else {
             alert('Este documento no tiene archivo adjunto.');
@@ -1002,14 +1062,23 @@ class GestorInmuebles {
                 // Si es edición y había un archivo anterior diferente, eliminarlo primero
                 if (id && archivoAnterior && archivoAnterior !== archivo.name) {
                     try {
-                        await this.dbManager.eliminarArchivo(id);
+                        const docAnterior = this.inmuebleActual.documentos?.find(d => d.id === id);
+                        if (docAnterior?.archivoRuta && this.firebaseManager) {
+                            await this.firebaseManager.eliminarArchivo(docAnterior.archivoRuta);
+                        } else {
+                            await this.dbManager.eliminarArchivo(id);
+                        }
                     } catch (error) {
                         console.error('Error al eliminar archivo anterior:', error);
                     }
                 }
                 
-                // Guardar nuevo archivo en IndexedDB
-                await this.dbManager.guardarArchivo(documentoId, archivo);
+                // Guardar archivo en Firebase Storage o IndexedDB
+                if (this.firebaseManager && this.usuarioActual) {
+                    archivoData = await this.firebaseManager.guardarArchivo(documentoId, archivo, this.inmuebleActual.id);
+                } else {
+                    archivoData = await this.dbManager.guardarArchivo(documentoId, archivo);
+                }
             } catch (error) {
                 console.error('Error al guardar archivo:', error);
                 alert('Error al guardar el archivo. El documento se guardará sin el archivo adjunto.');
@@ -1019,8 +1088,11 @@ class GestorInmuebles {
             }
         } else if (id && archivoAnterior && !document.getElementById('documentArchivo').files[0]) {
             // Si se está editando y se eliminó el archivo (no hay archivo nuevo y había uno anterior)
-            // Verificar si el usuario quiere mantener el archivo anterior o eliminarlo
-            // Por ahora, mantenemos el archivo anterior si no se sube uno nuevo
+            // Mantener el archivo anterior si no se sube uno nuevo
+            const docAnterior = this.inmuebleActual.documentos?.find(d => d.id === id);
+            if (docAnterior && docAnterior.archivoUrl) {
+                archivoData = { url: docAnterior.archivoUrl, ruta: docAnterior.archivoRuta };
+            }
         }
 
         const documento = {
@@ -1031,7 +1103,9 @@ class GestorInmuebles {
             notas: document.getElementById('documentNotas').value || null,
             archivoNombre: archivo ? archivo.name : (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoNombre || null),
             archivoTipo: archivo ? archivo.type : (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoTipo || null),
-            archivoTamaño: archivo ? archivo.size : (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoTamaño || null)
+            archivoTamaño: archivo ? archivo.size : (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoTamaño || null),
+            archivoUrl: archivoData?.url || (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoUrl || null),
+            archivoRuta: archivoData?.ruta || (this.inmuebleActual.documentos?.find(d => d.id === id)?.archivoRuta || null)
         };
 
         if (!this.inmuebleActual.documentos) {
@@ -1055,7 +1129,7 @@ class GestorInmuebles {
             this.inmuebles[index] = this.inmuebleActual;
         }
 
-        this.guardarInmuebles();
+        await this.guardarInmuebles();
         this.mostrarDocumentos();
         this.cerrarModal();
     }
